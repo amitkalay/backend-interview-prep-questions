@@ -33,26 +33,26 @@ class MovieDatabaseUtility:
         """
         self.sql_dir = Path(sql_dir)
         self.db_file = Path(sql_dir) / db_file
-        self.connection: sqlite3.Connection = None
-        
-        # Initialize database connection
+
+        # Initialize database (create file and tables)
         self._initialize_database()
-        
+
         # Parse and load data
         self._parse_and_insert_sql_files()
 
     def _initialize_database(self) -> None:
         """Initialize SQLite database connection and create tables."""
-        self.connection = sqlite3.connect(str(self.db_file))
-        self.connection.row_factory = sqlite3.Row
-        cursor = self.connection.cursor()
-        
-        # Drop existing tables if they exist (for fresh initialization)
-        cursor.execute("DROP TABLE IF EXISTS actors")
-        cursor.execute("DROP TABLE IF EXISTS movies")
-        
-        # Create movies table
-        cursor.execute("""
+        # Use a context manager to ensure commit and close per operation
+        with sqlite3.connect(str(self.db_file)) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+
+            # Drop existing tables if they exist (for fresh initialization)
+            cursor.execute("DROP TABLE IF EXISTS actors")
+            cursor.execute("DROP TABLE IF EXISTS movies")
+
+            # Create movies table
+            cursor.execute("""
             CREATE TABLE movies (
                 id INTEGER PRIMARY KEY NOT NULL,
                 imdb_id VARCHAR(20) NOT NULL,
@@ -70,8 +70,8 @@ class MovieDatabaseUtility:
             )
         """)
         
-        # Create actors table
-        cursor.execute("""
+            # Create actors table
+            cursor.execute("""
             CREATE TABLE actors (
                 id INTEGER PRIMARY KEY NOT NULL,
                 movie_id INTEGER NOT NULL,
@@ -80,8 +80,6 @@ class MovieDatabaseUtility:
                 FOREIGN KEY (movie_id) REFERENCES movies(id)
             )
         """)
-        
-        self.connection.commit()
         print("✓ Database tables created successfully")
 
     def _parse_and_insert_sql_files(self) -> None:
@@ -98,8 +96,7 @@ class MovieDatabaseUtility:
         self._insert_movies(movies_file)
         # Then insert actors
         self._insert_actors(actors_file)
-        
-        self.connection.commit()
+
         print("✓ Data inserted successfully into database")
 
     def _insert_actors(self, file_path: Path) -> None:
@@ -111,20 +108,24 @@ class MovieDatabaseUtility:
         pattern = r"INSERT INTO actors VALUES\((\d+),(\d+),'([^']+)','([^']+)'\)"
         matches = re.finditer(pattern, content)
         
-        cursor = self.connection.cursor()
         inserted_count = 0
-        
-        for match in matches:
-            actor_id, movie_id, imdb_id, name = match.groups()
-            try:
-                cursor.execute("""
-                    INSERT INTO actors (id, movie_id, imdb_id, name)
-                    VALUES (?, ?, ?, ?)
-                """, (int(actor_id), int(movie_id), imdb_id, name))
-                inserted_count += 1
-            except sqlite3.IntegrityError as e:
-                print(f"Warning: Could not insert actor {actor_id}: {e}")
-        
+
+        # Use a context manager so each insert batch is committed and connection closed
+        with sqlite3.connect(str(self.db_file)) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+
+            for match in matches:
+                actor_id, movie_id, imdb_id, name = match.groups()
+                try:
+                    cursor.execute("""
+                        INSERT INTO actors (id, movie_id, imdb_id, name)
+                        VALUES (?, ?, ?, ?)
+                    """, (int(actor_id), int(movie_id), imdb_id, name))
+                    inserted_count += 1
+                except sqlite3.IntegrityError as e:
+                    print(f"Warning: Could not insert actor {actor_id}: {e}")
+
         print(f"  • Inserted {inserted_count} actors")
 
     def _insert_movies(self, file_path: Path) -> None:
@@ -136,40 +137,43 @@ class MovieDatabaseUtility:
         pattern = r"INSERT INTO movies VALUES\((\d+),'([^']+)','([^']*?)','([^']*?)'\s*,(\d+),'([^']*?)','([^']*?)'\s*,(\d+),'([^']*?)','([^']*?)'\s*,([0-9.]+),(\d+),([0-9.]+)\)"
         matches = re.finditer(pattern, content)
         
-        cursor = self.connection.cursor()
         inserted_count = 0
-        
-        for match in matches:
-            groups = match.groups()
-            movie_id = int(groups[0])
-            
-            try:
-                cursor.execute("""
-                    INSERT INTO movies (
-                        id, imdb_id, title, director, year, rating,
-                        genres, runtime, country, language,
-                        imdb_score, imdb_votes, metacritic_score
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    movie_id,
-                    groups[1],                    # imdb_id
-                    groups[2],                    # title
-                    groups[3],                    # director
-                    int(groups[4]),              # year
-                    groups[5],                    # rating
-                    groups[6],                    # genres
-                    int(groups[7]),              # runtime
-                    groups[8],                    # country
-                    groups[9],                    # language
-                    float(groups[10]),           # imdb_score
-                    int(groups[11]),             # imdb_votes
-                    float(groups[12])            # metacritic_score
-                ))
-                inserted_count += 1
-            except sqlite3.IntegrityError as e:
-                print(f"Warning: Could not insert movie {movie_id}: {e}")
-        
+
+        with sqlite3.connect(str(self.db_file)) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+
+            for match in matches:
+                groups = match.groups()
+                movie_id = int(groups[0])
+
+                try:
+                    cursor.execute("""
+                        INSERT INTO movies (
+                            id, imdb_id, title, director, year, rating,
+                            genres, runtime, country, language,
+                            imdb_score, imdb_votes, metacritic_score
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        movie_id,
+                        groups[1],                    # imdb_id
+                        groups[2],                    # title
+                        groups[3],                    # director
+                        int(groups[4]),              # year
+                        groups[5],                    # rating
+                        groups[6],                    # genres
+                        int(groups[7]),              # runtime
+                        groups[8],                    # country
+                        groups[9],                    # language
+                        float(groups[10]),           # imdb_score
+                        int(groups[11]),             # imdb_votes
+                        float(groups[12])            # metacritic_score
+                    ))
+                    inserted_count += 1
+                except sqlite3.IntegrityError as e:
+                    print(f"Warning: Could not insert movie {movie_id}: {e}")
+
         print(f"  • Inserted {inserted_count} movies")
 
     def get_longest_running_movie(self) -> Dict[str, Any]:
@@ -179,19 +183,20 @@ class MovieDatabaseUtility:
         Returns:
             Dictionary containing the longest-running movie details
         """
-        cursor = self.connection.cursor()
-        cursor.execute("""
-            SELECT 
-                m.*,
-                COUNT(a.id) as actor_count
-            FROM movies m
-            LEFT JOIN actors a ON m.id = a.movie_id
-            GROUP BY m.id
-            ORDER BY m.runtime DESC
-            LIMIT 1
-        """)
-        
-        result = cursor.fetchone()
+        with sqlite3.connect(str(self.db_file)) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT 
+                    m.*,
+                    COUNT(a.id) as actor_count
+                FROM movies m
+                LEFT JOIN actors a ON m.id = a.movie_id
+                GROUP BY m.id
+                ORDER BY m.runtime DESC
+                LIMIT 1
+            """)
+            result = cursor.fetchone()
         if not result:
             return {}
         
@@ -212,31 +217,33 @@ class MovieDatabaseUtility:
         Returns:
             Dictionary containing the movie with most actors and actor list
         """
-        cursor = self.connection.cursor()
-        cursor.execute("""
-            SELECT 
-                m.*,
-                COUNT(a.id) as actor_count
-            FROM movies m
-            LEFT JOIN actors a ON m.id = a.movie_id
-            GROUP BY m.id
-            ORDER BY actor_count DESC
-            LIMIT 1
-        """)
-        
-        result = cursor.fetchone()
-        if not result:
-            return {}
-        
-        # Get all actors for this movie
-        cursor.execute("""
-            SELECT id, imdb_id, name
-            FROM actors
-            WHERE movie_id = ?
-            ORDER BY name
-        """, (result['id'],))
-        
-        actors = [dict(row) for row in cursor.fetchall()]
+        with sqlite3.connect(str(self.db_file)) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT 
+                    m.*,
+                    COUNT(a.id) as actor_count
+                FROM movies m
+                LEFT JOIN actors a ON m.id = a.movie_id
+                GROUP BY m.id
+                ORDER BY actor_count DESC
+                LIMIT 1
+            """)
+
+            result = cursor.fetchone()
+            if not result:
+                return {}
+
+            # Get all actors for this movie
+            cursor.execute("""
+                SELECT id, imdb_id, name
+                FROM actors
+                WHERE movie_id = ?
+                ORDER BY name
+            """, (result['id'],))
+
+            actors = [dict(row) for row in cursor.fetchall()]
         
         return {
             'title': result['title'],
@@ -260,21 +267,23 @@ class MovieDatabaseUtility:
         Returns:
             Dictionary containing top movies breakdown by rating
         """
-        cursor = self.connection.cursor()
-        
-        # Get top N movies by IMDB score
-        cursor.execute("""
-            SELECT 
-                m.*,
-                COUNT(a.id) as actors_count
-            FROM movies m
-            LEFT JOIN actors a ON m.id = a.movie_id
-            GROUP BY m.id
-            ORDER BY m.imdb_score DESC
-            LIMIT ?
-        """, (top_n,))
-        
-        top_movies = [dict(row) for row in cursor.fetchall()]
+        with sqlite3.connect(str(self.db_file)) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+
+            # Get top N movies by IMDB score
+            cursor.execute("""
+                SELECT 
+                    m.*,
+                    COUNT(a.id) as actors_count
+                FROM movies m
+                LEFT JOIN actors a ON m.id = a.movie_id
+                GROUP BY m.id
+                ORDER BY m.imdb_score DESC
+                LIMIT ?
+            """, (top_n,))
+
+            top_movies = [dict(row) for row in cursor.fetchall()]
         
         if not top_movies:
             return {}
@@ -311,41 +320,43 @@ class MovieDatabaseUtility:
         Returns:
             Dictionary with various statistics
         """
-        cursor = self.connection.cursor()
-        
-        # Get total counts
-        cursor.execute("SELECT COUNT(*) as total FROM movies")
-        total_movies = cursor.fetchone()['total']
-        
-        cursor.execute("SELECT COUNT(*) as total FROM actors")
-        total_actors = cursor.fetchone()['total']
-        
-        # Get average runtime and score
-        cursor.execute("""
-            SELECT 
-                AVG(runtime) as avg_runtime,
-                AVG(imdb_score) as avg_score
-            FROM movies
-        """)
-        avg_data = cursor.fetchone()
-        
-        # Get year range
-        cursor.execute("""
-            SELECT 
-                MIN(year) as min_year,
-                MAX(year) as max_year
-            FROM movies
-        """)
-        year_data = cursor.fetchone()
-        
-        # Get rating distribution
-        cursor.execute("""
-            SELECT rating, COUNT(*) as count
-            FROM movies
-            GROUP BY rating
-            ORDER BY rating
-        """)
-        rating_dist = {row['rating']: row['count'] for row in cursor.fetchall()}
+        with sqlite3.connect(str(self.db_file)) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+
+            # Get total counts
+            cursor.execute("SELECT COUNT(*) as total FROM movies")
+            total_movies = cursor.fetchone()['total']
+
+            cursor.execute("SELECT COUNT(*) as total FROM actors")
+            total_actors = cursor.fetchone()['total']
+
+            # Get average runtime and score
+            cursor.execute("""
+                SELECT 
+                    AVG(runtime) as avg_runtime,
+                    AVG(imdb_score) as avg_score
+                FROM movies
+            """)
+            avg_data = cursor.fetchone()
+
+            # Get year range
+            cursor.execute("""
+                SELECT 
+                    MIN(year) as min_year,
+                    MAX(year) as max_year
+                FROM movies
+            """)
+            year_data = cursor.fetchone()
+
+            # Get rating distribution
+            cursor.execute("""
+                SELECT rating, COUNT(*) as count
+                FROM movies
+                GROUP BY rating
+                ORDER BY rating
+            """)
+            rating_dist = {row['rating']: row['count'] for row in cursor.fetchall()}
         
         return {
             'total_movies': total_movies,
@@ -369,19 +380,21 @@ class MovieDatabaseUtility:
         Returns:
             List of movies matching the director
         """
-        cursor = self.connection.cursor()
-        cursor.execute("""
-            SELECT 
-                m.*,
-                COUNT(a.id) as actors_count
-            FROM movies m
-            LEFT JOIN actors a ON m.id = a.movie_id
-            WHERE m.director LIKE ?
-            GROUP BY m.id
-            ORDER BY m.imdb_score DESC
-        """, (f"%{director}%",))
-        
-        return [dict(row) for row in cursor.fetchall()]
+        with sqlite3.connect(str(self.db_file)) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT 
+                    m.*,
+                    COUNT(a.id) as actors_count
+                FROM movies m
+                LEFT JOIN actors a ON m.id = a.movie_id
+                WHERE m.director LIKE ?
+                GROUP BY m.id
+                ORDER BY m.imdb_score DESC
+            """, (f"%{director}%",))
+
+            return [dict(row) for row in cursor.fetchall()]
 
     def query_movies_by_rating(self, rating: str) -> List[Dict[str, Any]]:
         """
@@ -393,30 +406,25 @@ class MovieDatabaseUtility:
         Returns:
             List of movies with specified rating
         """
-        cursor = self.connection.cursor()
-        cursor.execute("""
-            SELECT 
-                m.*,
-                COUNT(a.id) as actors_count
-            FROM movies m
-            LEFT JOIN actors a ON m.id = a.movie_id
-            WHERE m.rating = ?
-            GROUP BY m.id
-            ORDER BY m.imdb_score DESC
-        """, (rating,))
-        
-        return [dict(row) for row in cursor.fetchall()]
+        with sqlite3.connect(str(self.db_file)) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT 
+                    m.*,
+                    COUNT(a.id) as actors_count
+                FROM movies m
+                LEFT JOIN actors a ON m.id = a.movie_id
+                WHERE m.rating = ?
+                GROUP BY m.id
+                ORDER BY m.imdb_score DESC
+            """, (rating,))
 
-    def close(self) -> None:
-        """Close database connection."""
-        if self.connection:
-            self.connection.close()
-            print("✓ Database connection closed")
+            return [dict(row) for row in cursor.fetchall()]
 
 
 def main():
     """Main function to demonstrate usage of the DatabaseUtility class."""
-    
     # Initialize the database utility
     db = MovieDatabaseUtility(
         sql_dir="/Users/amitkalay/Desktop/backend-interview-prep-questions",
@@ -483,9 +491,6 @@ def main():
     print("\n" + "=" * 80)
     print(f"SQLite Database created: database_raw_file")
     print("=" * 80)
-    
-    # Close database connection
-    db.close()
 
 
 if __name__ == "__main__":
